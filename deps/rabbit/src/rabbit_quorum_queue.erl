@@ -391,11 +391,14 @@ handle_tick(QName,
                                {messages_persistent, M}
 
                                | infos(QName, ?STATISTICS_KEYS -- [consumers])],
-                      %TODO ansd: consistent_query only every 15 - 30 seconds (instead of 5 seconds tick time) to reduce load?
+                      %TODO: This function is currently called every TICK_TIMEOUT, i.e. every 5000 ms.
+                      % Ideally, instead, this function should be called every collect_statistics_interval ms.
+                      % To make this change happen, we'd need to introduce a new variable in the ra conf since the current tick_timeout in the ra conf
+                      % does not only imply when the tick/2 callback (and therefore this function) is called, but seems also to be used for leader election algorithm.
                       InfosWithUp = case application:get_env(rabbitmq_prometheus, return_per_object_metrics) of
                         {ok, true} ->
-                            {ok, Qq} = rabbit_amqqueue:lookup(QName),
-                            case ra:consistent_query(amqqueue:get_pid(Qq), fun (_) -> ok end) of
+                            {ok, Queue} = rabbit_amqqueue:lookup(QName),
+                            case ra:consistent_query(amqqueue:get_pid(Queue), fun (_) -> ok end) of
                               {ok, ok, _} ->
                                 rabbit_log:debug("ra:consistent_query succeeded for queue ~p~n", [QName]),
                                 [{up, 1} | Infos];
