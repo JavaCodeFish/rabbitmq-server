@@ -391,18 +391,21 @@ handle_tick(QName,
                                {messages_persistent, M}
 
                                | infos(QName, ?STATISTICS_KEYS -- [consumers])],
-                      %TODO ansd: should we execute consistent_query conditonally only if PerObjectMetrics = application:get_env(rabbitmq_prometheus, return_per_object_metrics, false),
                       %TODO ansd: consistent_query only every 15 - 30 seconds (instead of 5 seconds tick time) to reduce load?
-                      {ok, Qq} = rabbit_amqqueue:lookup(QName),
-                      Up = case ra:consistent_query(amqqueue:get_pid(Qq), fun (_) -> ok end) of
-                          {ok, ok, _} ->
-                              rabbit_log:debug("consistent_query succeeded for queue ~p~n", [QName]),
-                              1;
-                          _ ->
-                              rabbit_log:debug("consistent_query failed for queue ~p~n", [QName]),
-                              0
+                      InfosWithUp = case application:get_env(rabbitmq_prometheus, return_per_object_metrics) of
+                        {ok, true} ->
+                            {ok, Qq} = rabbit_amqqueue:lookup(QName),
+                            case ra:consistent_query(amqqueue:get_pid(Qq), fun (_) -> ok end) of
+                              {ok, ok, _} ->
+                                rabbit_log:debug("ra:consistent_query succeeded for queue ~p~n", [QName]),
+                                [{up, 1} | Infos];
+                              _ ->
+                                rabbit_log:debug("ra:consistent_query failed for queue ~p~n", [QName]),
+                                [{up, 0} | Infos]
+                            end;
+                          _ -> Infos
                       end,
-                      rabbit_core_metrics:queue_stats(QName, [{up, Up} | Infos]),
+                      rabbit_core_metrics:queue_stats(QName, InfosWithUp),
                       rabbit_event:notify(queue_stats,
                                           Infos ++ [{name, QName},
                                                     {messages, M},
