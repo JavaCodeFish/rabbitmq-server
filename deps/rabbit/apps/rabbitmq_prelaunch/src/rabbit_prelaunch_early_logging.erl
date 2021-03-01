@@ -21,13 +21,14 @@
          use_colored_logging/1]).
 -export([filter_log_event/2]).
 
+-define(CONFIGURED_KEY, {?MODULE, configured}).
+
 setup_early_logging(#{log_levels := undefined} = Context,
                     LagerEventToStdout) ->
     setup_early_logging(Context#{log_levels => get_default_log_level()},
                         LagerEventToStdout);
 setup_early_logging(Context, LagerEventToStdout) ->
-    Configured = is_rmqlog_filter_defined(),
-    case Configured of
+    case is_configured() of
         true  -> ok;
         false -> do_setup_early_logging(Context, LagerEventToStdout)
     end.
@@ -41,9 +42,8 @@ do_setup_early_logging(#{log_levels := LogLevels} = Context,
     ok = logger:update_handler_config(
            default, main_handler_config(Context)).
 
-is_rmqlog_filter_defined() ->
-    {ok, #{filters := Filters}} = logger:get_handler_config(default),
-    lists:keymember(?FILTER_NAME, 1, Filters).
+is_configured() ->
+    persistent_term:get(?CONFIGURED_KEY, false).
 
 add_rmqlog_filter(LogLevels) ->
     FilterConfig0 = lists:foldl(
@@ -58,7 +58,8 @@ add_rmqlog_filter(LogLevels) ->
                     end,
     ok = logger:add_handler_filter(
            default, ?FILTER_NAME, {fun filter_log_event/2, FilterConfig1}),
-    ok = logger:set_primary_config(level, all).
+    ok = logger:set_primary_config(level, all),
+    ok = persistent_term:put(?CONFIGURED_KEY, true).
 
 filter_log_event(
   #{meta := #{domain := ?RMQLOG_DOMAIN_GLOBAL}} = LogEvent,

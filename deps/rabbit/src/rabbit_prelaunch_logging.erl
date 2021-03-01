@@ -21,6 +21,8 @@
 
 -type log_location() :: file:name() | string().
 
+-define(CONFIG_RUN_NUMBER_KEY, {?MODULE, config_run_number}).
+
 %% Logging configuration in the `rabbit` Erlang application.
 %%
 %% {rabbit, [
@@ -43,9 +45,16 @@
 setup(Context) ->
     ?LOG_DEBUG("\n== Logging ==",
                #{domain => ?RMQLOG_DOMAIN_PRELAUNCH}),
+    ok = compute_config_run_number(),
     ok = set_ERL_CRASH_DUMP_envvar(Context),
-    ok = configure_logger(Context),
-    ok.
+    ok = configure_logger(Context).
+
+compute_config_run_number() ->
+    RunNum = persistent_term:get(?CONFIG_RUN_NUMBER_KEY, 0),
+    ok = persistent_term:put(?CONFIG_RUN_NUMBER_KEY, RunNum + 1).
+
+get_config_run_number() ->
+    persistent_term:get(?CONFIG_RUN_NUMBER_KEY).
 
 log_locations() ->
     Handlers = logger:get_handler_config(),
@@ -129,6 +138,7 @@ get_log_base_dir(#{log_base_dir := LogBaseDirFromEnv} = Context) ->
 %% -------------------------------------------------------------------
 
 configure_logger(Context) ->
+    try
     %% Configure main handlers.
     %% We distinguish them by their type and possibly other
     %% parameters (file name, syslog settings, etc.).
@@ -141,13 +151,18 @@ configure_logger(Context) ->
     ?LOG_DEBUG("Logger handlers:~n  ~p", [Handlers],
                #{domain => ?RMQLOG_DOMAIN_PRELAUNCH}),
     ?LOG_NOTICE("Logging: switching to configured handler(s); following "
-                "messages may not be visible on <stdout>",
+                "messages may not be visible in this log output",
                 #{domain => ?RMQLOG_DOMAIN_PRELAUNCH}),
     ok = install_handlers(Handlers),
     ?LOG_NOTICE("Logging: configured log handlers are now ACTIVE",
                 #{domain => ?RMQLOG_DOMAIN_PRELAUNCH}),
     ok = maybe_log_test_messsages(LogConfig3),
-    ok.
+    ok
+    catch
+        T:R:S ->
+            io:format("~p ~p ~p~n", [T, R, S]),
+            throw(R)
+    end.
 
 get_log_configuration_from_app_env() ->
     %% The log configuration in the Cuttlefish configuration file or the
@@ -209,11 +224,11 @@ normalize_main_output(exchange, Props, Outputs) ->
       Outputs).
 
 normalize_main_file_output([{file, false} | _], _, Outputs) ->
-    maps:filter(
+    lists:filter(
       fun
-          (_, #{module := rabbit_logger_std_h,
-                config := #{type := file}}) -> false;
-          (_, _)                            -> true
+          (#{module := rabbit_logger_std_h,
+             config := #{type := file}}) -> false;
+          (_)                            -> true
       end, Outputs);
 normalize_main_file_output([{file, Filename} | Rest],
                            #{config := Config} = Output, Outputs) ->
@@ -243,17 +258,17 @@ normalize_main_console_output(
   Outputs)
   when ?IS_STD_H_COMPAT(Mod1) andalso
        ?IS_STDDEV(Stddev) ->
-    maps:filter(
+    lists:filter(
       fun
-          (_, #{module := Mod2,
-                config := #{type := standard_io}})
+          (#{module := Mod2,
+             config := #{type := standard_io}})
             when ?IS_STD_H_COMPAT(Mod2) ->
               false;
-          (_, #{module := Mod2,
-                config := #{type := standard_error}})
+          (#{module := Mod2,
+             config := #{type := standard_error}})
             when ?IS_STD_H_COMPAT(Mod2) ->
               false;
-          (_, _) ->
+          (_) ->
               true
       end, Outputs);
 normalize_main_console_output(
@@ -262,7 +277,7 @@ normalize_main_console_output(
   Outputs)
   when Mod =:= syslog_logger_h orelse
        Mod =:= rabbit_logger_exchange_h ->
-    maps:filter(fun(_, #{module := M}) -> M =/= Mod end, Outputs);
+    lists:filter(fun(#{module := M}) -> M =/= Mod end, Outputs);
 normalize_main_console_output([{enabled, true} | Rest], Output, Outputs) ->
     normalize_main_console_output(Rest, Output, Outputs);
 normalize_main_console_output([{level, Level} | Rest],
@@ -583,14 +598,17 @@ adjust_log_levels(Handlers) ->
 assign_handler_ids(Handlers) ->
     Handlers1 = [maps:get(Key, Handlers)
                  || Key <- lists:sort(maps:keys(Handlers))],
-    assign_handler_ids(Handlers1, #{next_file => 1}, []).
+    assign_handler_ids(Handlers1,
+                       #{config_run_number => get_config_run_number(),
+                         next_file => 1},
+                       []).
 
 assign_handler_ids(
   [#{module := Mod, config := #{type := file}} = Handler | Rest],
   #{next_file := NextFile} = State,
   Result)
   when ?IS_STD_H_COMPAT(Mod) ->
-    Id = list_to_atom(rabbit_misc:format("rabbitmq_log_file_~b", [NextFile])),
+    Id = format_id("log_file_~b", [NextFile], State),
     Handler1 = Handler#{id => Id},
     assign_handler_ids(
       Rest, State#{next_file => NextFile + 1}, [Handler1 | Result]);
@@ -599,44 +617,83 @@ assign_handler_ids(
   State,
   Result)
   when ?IS_STD_H_COMPAT(Mod) ->
-    Handler1 = Handler#{id => stdout},
+    Id = format_id("stdout", [], State),
+    Handler1 = Handler#{id => Id},
     assign_handler_ids(Rest, State, [Handler1 | Result]);
 assign_handler_ids(
   [#{module := Mod, config := #{type := standard_error}} = Handler | Rest],
   State,
   Result)
   when ?IS_STD_H_COMPAT(Mod) ->
-    Handler1 = Handler#{id => stderr},
+    Id = format_id("stderr", [], State),
+    Handler1 = Handler#{id => Id},
     assign_handler_ids(Rest, State, [Handler1 | Result]);
 assign_handler_ids(
   [#{module := syslog_logger_h} = Handler
    | Rest],
   State,
   Result) ->
-    Handler1 = Handler#{id => syslog},
+    Id = format_id("syslog", [], State),
+    Handler1 = Handler#{id => Id},
     assign_handler_ids(Rest, State, [Handler1 | Result]);
 assign_handler_ids(
   [#{module := rabbit_logger_exchange_h} = Handler
    | Rest],
   State,
   Result) ->
-    Handler1 = Handler#{id => exchange},
+    Id = format_id("exchange", [], State),
+    Handler1 = Handler#{id => Id},
     assign_handler_ids(Rest, State, [Handler1 | Result]);
 assign_handler_ids([], _, Result) ->
     lists:reverse(Result).
+
+format_id(Format, Args, #{config_run_number := RunNum}) ->
+    list_to_atom(rabbit_misc:format("rmq_~b_" ++ Format, [RunNum | Args])).
 
 install_handlers([]) ->
     throw(no_logger_handler_configured);
 install_handlers(Handlers) ->
     ok = do_install_handlers(Handlers),
-    _ = logger:remove_handler(default),
+    ok = remove_old_handlers(),
     ok = define_primary_level(Handlers),
     ok.
 
 do_install_handlers([#{id := Id, module := Module} = Handler | Rest]) ->
-    ok = logger:add_handler(Id, Module, Handler),
-    do_install_handlers(Rest);
+    case logger:add_handler(Id, Module, Handler) of
+        ok ->
+            do_install_handlers(Rest);
+        {error, {handler_not_added, {open_failed, Filename, Reason}}} ->
+            throw({error, {cannot_log_to_file, Filename, Reason}});
+        {error, {handler_not_added, Reason}} ->
+            throw({error, {cannot_log_to_file, unknown, Reason}})
+    end;
 do_install_handlers([]) ->
+    ok.
+
+remove_old_handlers() ->
+    _ = logger:remove_handler(default),
+    RunNum = get_config_run_number(),
+    lists:foreach(
+      fun(Id) ->
+              Ret = re:run(atom_to_list(Id), "^rmq_([0-9]+)_",
+                           [{capture, all_but_first, list}]),
+              case Ret of
+                  {match, [NumStr]} ->
+                      Num = erlang:list_to_integer(NumStr),
+                      if
+                          Num < RunNum ->
+                              ?LOG_DEBUG(
+                                "Removing old logger handler ~s",
+                                [Id],
+                                #{domain => ?RMQLOG_DOMAIN_PRELAUNCH}),
+                              ok = logger:remove_handler(Id);
+                          true ->
+                              ok
+                      end;
+                  _ ->
+                      ok
+              end
+      end, lists:sort(logger:get_handler_ids())),
     ok.
 
 define_primary_level(Handlers) ->
