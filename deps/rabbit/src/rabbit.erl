@@ -857,6 +857,7 @@ start(normal, []) ->
         %%
         %% Note that plugins were not taken care of at this point
         %% either.
+        throw(moche),
         ?LOG_DEBUG(
           "Register `rabbit` process (~p) for rabbit_node_monitor",
           [self()]),

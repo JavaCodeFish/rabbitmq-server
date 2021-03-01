@@ -98,9 +98,19 @@ log_exception(Class, Exception, Stacktrace) ->
     log_message(Message).
 
 format_exception(Class, Exception, Stacktrace) ->
+    StacktraceStrs = [case proplists:get_value(line, Props) of
+                          undefined ->
+                              io_lib:format("    ~ts:~ts/~b",
+                                            [Mod, Fun, Arity]);
+                          Line ->
+                              io_lib:format("    ~ts:~ts/~b, line ~b",
+                                            [Mod, Fun, Arity, Line])
+                      end
+                      || {Mod, Fun, Arity, Props} <- Stacktrace],
+    ExceptionStr = io_lib:format("~ts:~0p", [Class, Exception]),
     rabbit_misc:format(
-      "Exception during startup:~n~s",
-      [lager:pr_stacktrace(Stacktrace, {Class, Exception})]).
+      "Exception during startup:~n~n~s~n~n~s",
+      [ExceptionStr, string:join(StacktraceStrs, "\n")]).
 
 log_message(Message) ->
     Lines = string:split(

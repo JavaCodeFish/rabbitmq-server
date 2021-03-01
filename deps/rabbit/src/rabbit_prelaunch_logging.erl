@@ -138,7 +138,6 @@ get_log_base_dir(#{log_base_dir := LogBaseDirFromEnv} = Context) ->
 %% -------------------------------------------------------------------
 
 configure_logger(Context) ->
-    try
     %% Configure main handlers.
     %% We distinguish them by their type and possibly other
     %% parameters (file name, syslog settings, etc.).
@@ -156,13 +155,7 @@ configure_logger(Context) ->
     ok = install_handlers(Handlers),
     ?LOG_NOTICE("Logging: configured log handlers are now ACTIVE",
                 #{domain => ?RMQLOG_DOMAIN_PRELAUNCH}),
-    ok = maybe_log_test_messsages(LogConfig3),
-    ok
-    catch
-        T:R:S ->
-            io:format("~p ~p ~p~n", [T, R, S]),
-            throw(R)
-    end.
+    ok = maybe_log_test_messsages(LogConfig3).
 
 get_log_configuration_from_app_env() ->
     %% The log configuration in the Cuttlefish configuration file or the
