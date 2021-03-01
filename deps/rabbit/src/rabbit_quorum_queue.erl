@@ -395,20 +395,16 @@ handle_tick(QName,
                       % Ideally, instead, this function should be called every collect_statistics_interval ms.
                       % To make this change happen, we'd need to introduce a new variable in the ra conf since the current tick_timeout in the ra conf
                       % does not only imply when the tick/2 callback (and therefore this function) is called, but seems also to be used for leader election algorithm.
-                      InfosWithUp = case application:get_env(rabbitmq_prometheus, return_per_object_metrics) of
-                        {ok, true} ->
-                            {ok, Queue} = rabbit_amqqueue:lookup(QName),
-                            case ra:consistent_query(amqqueue:get_pid(Queue), fun (_) -> ok end) of
-                              {ok, ok, _} ->
-                                rabbit_log:debug("ra:consistent_query succeeded for queue ~p~n", [QName]),
-                                [{up, 1} | Infos];
-                              _ ->
-                                rabbit_log:debug("ra:consistent_query failed for queue ~p~n", [QName]),
-                                [{up, 0} | Infos]
-                            end;
-                          _ -> Infos
+                      {ok, Qq} = rabbit_amqqueue:lookup(QName),
+                      Up = case ra:consistent_query(amqqueue:get_pid(Qq), fun (_) -> ok end) of
+                          {ok, ok, _} ->
+                              rabbit_log:debug("ra:consistent_query succeeded for queue ~p~n", [QName]),
+                              1;
+                          _ ->
+                              rabbit_log:debug("ra:consistent_query failed for queue ~p~n", [QName]),
+                              0
                       end,
-                      rabbit_core_metrics:queue_stats(QName, InfosWithUp),
+                      rabbit_core_metrics:queue_stats(QName, [{up, Up} | Infos]),
                       rabbit_event:notify(queue_stats,
                                           Infos ++ [{name, QName},
                                                     {messages, M},
